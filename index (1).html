@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Queue Hub</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎮</text></svg>">
+<style>
+:root{--bg:#f6f5f2;--card:#fff;--ink:#1c1b19;--mute:#6b675f;--line:#e3e0d9;--acc:#5b4bdb;--accink:#fff;--soft:#eeebff;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){color-scheme:dark;--bg:#141416;--card:#1e1e22;--ink:#ecebe8;--mute:#9a978f;--line:#303036;--acc:#8c7dff;--accink:#12101f;--soft:#2a2740}}
+:root[data-theme="dark"]{color-scheme:dark;--bg:#141416;--card:#1e1e22;--ink:#ecebe8;--mute:#9a978f;--line:#303036;--acc:#8c7dff;--accink:#12101f;--soft:#2a2740}
+[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:720px;margin:0 auto;padding:20px 16px 60px}
+h1{font-size:1.6rem;margin:.2em 0}h2{font-size:1.05rem;margin:1.4em 0 .5em}
+.mute{color:var(--mute)}.small{font-size:.85rem}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin:0 0 10px;display:block}
+form.card{display:flex;flex-direction:column;gap:10px}
+input:not([type=checkbox]){font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:9px 10px;width:100%;box-sizing:border-box}
+input[type=number]{width:70px;margin-left:6px}
+.opts{display:flex;flex-wrap:wrap;gap:14px;align-items:center;font-size:.9rem}
+.btn{font:inherit;font-weight:600;background:var(--acc);color:var(--accink);border:0;border-radius:8px;padding:9px 14px;cursor:pointer}
+.btn.ghost{background:var(--soft);color:var(--ink);font-weight:500;padding:6px 10px;font-size:.85rem}
+.row{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}
+.qrow{display:flex;justify-content:space-between;text-decoration:none;color:inherit}
+.qrow:hover{border-color:var(--acc)}
+a.back{color:var(--acc);text-decoration:none;font-size:.9rem}
+.req{display:flex;gap:12px;align-items:center}
+.grow{flex:1;min-width:0;overflow-wrap:anywhere}
+.vote{font:inherit;display:flex;flex-direction:column;align-items:center;min-width:46px;padding:6px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);cursor:pointer}
+.vote.on{background:var(--acc);color:var(--accink);border-color:var(--acc)}
+.ctl{display:flex;flex-direction:column;gap:4px}
+.note{background:var(--soft);border-radius:8px;padding:8px 12px;margin:10px 0;font-size:.9rem}
+#toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translate(-50%,20px);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:10px;opacity:0;pointer-events:none;transition:.2s;max-width:90vw;font-size:.9rem}
+#toast.on{opacity:1;transform:translate(-50%,0)}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0"></script>
+</head>
+<body>
+<div class="wrap">
+<div id="msg" class="note" hidden></div>
+
+<section id="home" hidden>
+  <h1>Queue Hub</h1>
+  <p class="mute">Make a request queue, share its link, and let people vote on what’s next.</p>
+  <form id="newq" class="card" hidden>
+    <b>New queue</b>
+    <input name="qname" placeholder="Queue name (e.g. Friday game night)" maxlength="60" required>
+    <div class="opts">
+      <label><input type="checkbox" name="approval"> Approve requests first</label>
+      <label>Max per person<input type="number" name="max" value="3" min="1" max="20"></label>
+    </div>
+    <div><button class="btn">Create queue</button></div>
+  </form>
+  <form id="login" class="card" hidden>
+    <b>Want to run your own queue?</b>
+    <span class="mute small">Requesting and voting need no account. Owners sign in with a magic link.</span>
+    <input type="email" name="email" placeholder="you@example.com" required>
+    <div><button class="btn">Email me a sign-in link</button></div>
+  </form>
+  <div id="whoami" class="small mute" hidden></div>
+  <h2>All queues</h2>
+  <div id="qlist"><p class="mute">Loading…</p></div>
+</section>
+
+<section id="queue" hidden>
+  <a href="#" class="back">← All queues</a>
+  <div id="qhead"></div>
+  <form id="reqform" class="card" hidden>
+    <b>Request a game</b>
+    <input name="game" placeholder="Game name" maxlength="80" required>
+    <input name="note" placeholder="Note (optional)" maxlength="200">
+    <input name="by" placeholder="Your name" maxlength="30">
+    <div><button class="btn">Add request</button></div>
+  </form>
+  <div id="qbody"></div>
+</section>
+</div>
+<div id="toast" role="status"></div>
+
+<script>
+// 1) Paste your project values from Supabase > Project Settings > API.
+const SUPABASE_URL = 'https://qcrhszyglxachtatbqgy.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_MrXcsP1ldPiXrmsiiu-Gig_1PBepkbR';
+
+const $ = s => document.querySelector(s);
+const h = (t, p = {}, ...k) => {
+  const e = document.createElement(t);
+  for (const [a, v] of Object.entries(p)) {
+    if (a === 'class') e.className = v;
+    else if (a.startsWith('on')) e.addEventListener(a.slice(2), v);
+    else if (v !== false && v != null) e.setAttribute(a, v === true ? '' : v);
+  }
+  for (const c of k.flat()) if (c != null && c !== false) e.append(c.nodeType ? c : document.createTextNode(String(c)));
+  return e;
+};
+let tt;
+function toast(m) {
+  const t = $('#toast'); t.textContent = m; t.classList.add('on');
+  clearTimeout(tt); tt = setTimeout(() => t.classList.remove('on'), 3500);
+}
+const nameStore = {
+  get() { try { return localStorage.getItem('qh-name') || ''; } catch (e) { return ''; } },
+  set(v) { try { localStorage.setItem('qh-name', v); } catch (e) {} }
+};
+
+let sb, me, isOwnerAccount = false, curId = null, Q, R = [], reloadT;
+const votes = r => (r.votes || []).length;
+const iVoted = r => (r.votes || []).some(v => v.user_id === me);
+
+async function loadHome() {
+  const { data, error } = await sb.from('queues').select('id,title,is_open').order('created_at', { ascending: false }).limit(50);
+  const box = $('#qlist'); box.replaceChildren();
+  if (error) { box.append(h('p', { class: 'mute' }, 'Couldn’t load queues.')); return; }
+  if (!data.length) { box.append(h('p', { class: 'mute' }, 'No queues yet.')); return; }
+  data.forEach(q => box.append(h('a', { class: 'card qrow', href: '#q-' + q.id }, h('b', {}, q.title), h('span', { class: 'mute' }, q.is_open ? 'Open' : 'Closed'))));
+}
+
+async function loadQueue() {
+  if (!curId) return;
+  const [q, r] = await Promise.all([
+    sb.from('queues').select('*').eq('id', curId).maybeSingle(),
+    sb.from('requests').select('*, votes(user_id)').eq('queue_id', curId).order('created_at')
+  ]);
+  Q = q.data || null; R = r.data || [];
+  drawQueue();
+}
+
+function scheduleReload() {
+  clearTimeout(reloadT);
+  reloadT = setTimeout(() => (curId ? loadQueue() : loadHome()), 250);
+}
+
+const fail = (e, msg) => { if (e) { toast(msg); return true; } };
+const setStatus = async (r, status) => fail((await sb.from('requests').update({ status }).eq('id', r.id)).error, 'Couldn’t update that request.');
+const remove = async r => fail((await sb.from('requests').delete().eq('id', r.id)).error, 'Couldn’t remove that request.');
+const qset = async patch => fail((await sb.from('queues').update(patch).eq('id', curId)).error, 'Couldn’t save that change.');
+async function vote(r) {
+  const q = iVoted(r) ? sb.from('votes').delete().eq('request_id', r.id).eq('user_id', me) : sb.from('votes').insert({ request_id: r.id });
+  fail((await q).error, 'Couldn’t save your vote.');
+}
+
+function controls(r) {
+  const b = (label, fn) => h('button', { class: 'btn ghost', onclick: fn }, label);
+  const s = r.status;
+  if (s === 'pending') return [b('Approve', () => setStatus(r, 'queued')), b('Remove', () => remove(r))];
+  if (s === 'queued') return [b('Play', () => setStatus(r, 'playing')), b('Skip', () => setStatus(r, 'skipped')), b('Remove', () => remove(r))];
+  if (s === 'playing') return [b('Done', () => setStatus(r, 'done')), b('Back to queue', () => setStatus(r, 'queued'))];
+  return [b('Requeue', () => setStatus(r, 'queued')), b('Remove', () => remove(r))];
+}
+
+function row(r, own) {
+  const mine = iVoted(r);
+  return h('div', { class: 'card req' },
+    h('button', { class: 'vote' + (mine ? ' on' : ''), 'aria-pressed': String(mine), title: mine ? 'Remove your vote' : 'Vote', onclick: () => vote(r) }, '▲', h('b', {}, votes(r))),
+    h('div', { class: 'grow' },
+      h('b', {}, r.game),
+      r.note && h('div', { class: 'mute small' }, r.note),
+      h('div', { class: 'mute small' }, 'by ' + (r.by_name || 'someone'))),
+    own && h('div', { class: 'ctl' }, controls(r)));
+}
+
+function sec(title, list, own, empty) {
+  if (!list.length && !empty) return null;
+  return h('div', {}, h('h2', {}, title), list.length ? list.map(r => row(r, own)) : h('p', { class: 'mute' }, empty));
+}
+
+function drawQueue() {
+  const head = $('#qhead'), body = $('#qbody'), form = $('#reqform');
+  if (Q === undefined) { head.replaceChildren(h('p', { class: 'mute' }, 'Loading…')); body.replaceChildren(); form.hidden = true; return; }
+  if (Q === null) { head.replaceChildren(h('p', {}, 'This queue doesn’t exist.')); body.replaceChildren(); form.hidden = true; return; }
+  const own = Q.owner_id === me;
+  head.replaceChildren(
+    h('h1', {}, Q.title),
+    h('p', { class: 'mute' }, (Q.is_open ? 'Open for requests' : 'Closed') + ' · up to ' + Q.max_per_person + ' per person' + (Q.approval ? ' · requests need approval' : '')),
+    own && h('div', { class: 'row' },
+      h('button', { class: 'btn ghost', onclick: () => qset({ is_open: !Q.is_open }) }, Q.is_open ? 'Close queue' : 'Reopen queue'),
+      h('button', { class: 'btn ghost', onclick: () => qset({ approval: !Q.approval }) }, Q.approval ? 'Turn off approval' : 'Require approval')));
+  form.hidden = !Q.is_open;
+  const by = s => R.filter(r => r.status === s);
+  const up = by('queued').sort((a, b) => votes(b) - votes(a) || new Date(a.created_at) - new Date(b.created_at));
+  body.replaceChildren(
+    sec('Now playing', by('playing'), own),
+    sec('Up next', up, own, 'Nothing queued yet.'),
+    sec('Waiting for approval', by('pending').filter(r => own || r.user_id === me), own),
+    sec('Finished', [...by('done'), ...by('skipped')], own));
+}
+
+async function addReq(e) {
+  e.preventDefault();
+  const f = e.target.elements, game = f.game.value.trim();
+  if (!game || !Q || !Q.is_open) return;
+  if (R.some(r => ['pending', 'queued', 'playing'].includes(r.status) && r.game.toLowerCase() === game.toLowerCase())) {
+    toast('That game is already in the queue. Give it a vote instead.'); return;
+  }
+  nameStore.set(f.by.value.trim());
+  const status = Q.approval && Q.owner_id !== me ? 'pending' : 'queued';
+  const { error } = await sb.from('requests').insert({ queue_id: curId, game, note: f.note.value.trim(), by_name: f.by.value.trim(), status });
+  if (error) { toast('Couldn’t add that. You may be at the limit of ' + Q.max_per_person + ' active requests.'); return; }
+  f.game.value = ''; f.note.value = '';
+  if (status === 'pending') toast('Request sent. The owner will approve it soon.');
+  loadQueue();
+}
+
+async function createQueue(e) {
+  e.preventDefault();
+  const f = e.target.elements, title = f.qname.value.trim();
+  if (!title) return;
+  const { data, error } = await sb.from('queues').insert({ title, approval: f.approval.checked, max_per_person: Math.min(20, Math.max(1, +f.max.value || 3)) }).select('id').single();
+  if (error) { toast('Couldn’t create the queue.'); return; }
+  e.target.reset(); location.hash = 'q-' + data.id;
+}
+
+async function sendLink(e) {
+  e.preventDefault();
+  const email = e.target.elements.email.value.trim();
+  const { error } = await sb.auth.signInWithOtp({ email, options: { emailRedirectTo: location.origin + location.pathname } });
+  toast(error ? 'Couldn’t send the link. Try again in a minute.' : 'Check your email for the sign-in link.');
+}
+
+function route() {
+  const m = location.hash.match(/^#q-([a-z0-9]+)$/);
+  $('#home').hidden = !!m; $('#queue').hidden = !m;
+  if (m) { curId = m[1]; Q = undefined; R = []; drawQueue(); loadQueue(); }
+  else { curId = null; loadHome(); }
+}
+
+async function start() {
+  if (SUPABASE_URL.startsWith('PASTE')) {
+    const m = $('#msg'); m.textContent = 'Add your Supabase project URL and anon key at the top of the script to get started.'; m.hidden = false; return;
+  }
+  sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  let { data: { session } } = await sb.auth.getSession();
+  if (!session) session = (await sb.auth.signInAnonymously()).data.session;
+  if (!session) { const m = $('#msg'); m.textContent = 'Couldn’t start a session. Check that anonymous sign-ins are enabled in Supabase.'; m.hidden = false; return; }
+  me = session.user.id; isOwnerAccount = !session.user.is_anonymous;
+  $('#newq').hidden = !isOwnerAccount; $('#login').hidden = isOwnerAccount;
+  if (isOwnerAccount) { const w = $('#whoami'); w.textContent = 'Signed in as ' + session.user.email; w.hidden = false; }
+  $('#newq').addEventListener('submit', createQueue);
+  $('#login').addEventListener('submit', sendLink);
+  $('#reqform').addEventListener('submit', addReq);
+  $('#reqform').elements.by.value = nameStore.get();
+  sb.channel('qh').on('postgres_changes', { event: '*', schema: 'public' }, scheduleReload).subscribe();
+  addEventListener('hashchange', route);
+  route();
+}
+async function init() {
+  try {
+    if (typeof supabase === 'undefined') throw new Error('The Supabase library didn’t load. Check your connection or an ad blocker.');
+    await start();
+  } catch (err) {
+    const m = $('#msg'); m.textContent = 'Something went wrong: ' + (err.message || err); m.hidden = false;
+  }
+}
+init();
+</script>
+</body>
+</html>
